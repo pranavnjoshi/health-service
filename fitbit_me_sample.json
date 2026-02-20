@@ -1,0 +1,83 @@
+﻿{
+    "provider":  "fitbit",
+    "user_id":  "me",
+    "metrics":  {
+                    "steps":  [
+                                  {
+                                      "timestamp":  0,
+                                      "value":  20359
+                                  },
+                                  {
+                                      "timestamp":  1,
+                                      "value":  17839
+                                  },
+                                  {
+                                      "timestamp":  2,
+                                      "value":  21065
+                                  },
+                                  {
+                                      "timestamp":  3,
+                                      "value":  21345
+                                  },
+                                  {
+                                      "timestamp":  4,
+                                      "value":  13149
+                                  },
+                                  {
+                                      "timestamp":  5,
+                                      "value":  15269
+                                  },
+                                  {
+                                      "timestamp":  6,
+                                      "value":  13632
+                                  },
+                                  {
+                                      "timestamp":  7,
+                                      "value":  12614
+                                  },
+                                  {
+                                      "timestamp":  8,
+                                      "value":  7528
+                                  }
+                              ],
+                    "calories":  [
+                                     {
+                                         "timestamp":  0,
+                                         "value":  3043.0
+                                     },
+                                     {
+                                         "timestamp":  1,
+                                         "value":  2918.0
+                                     },
+                                     {
+                                         "timestamp":  2,
+                                         "value":  3237.0
+                                     },
+                                     {
+                                         "timestamp":  3,
+                                         "value":  3233.0
+                                     },
+                                     {
+                                         "timestamp":  4,
+                                         "value":  3036.0
+                                     },
+                                     {
+                                         "timestamp":  5,
+                                         "value":  2905.0
+                                     },
+                                     {
+                                         "timestamp":  6,
+                                         "value":  2863.0
+                                     },
+                                     {
+                                         "timestamp":  7,
+                                         "value":  2634.0
+                                     },
+                                     {
+                                         "timestamp":  8,
+                                         "value":  1903.0
+                                     }
+                                 ]
+                },
+    "sleep":  null
+}

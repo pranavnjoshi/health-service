@@ -1,4 +1,5 @@
 import os
+from typing import Dict
 import base64
 import time
 from typing import Dict, Any, List, Optional
@@ -73,14 +74,39 @@ class FitbitClient:
         resp.raise_for_status()
         return resp.json().get("weight", [])
 
-    def fetch_sleep(self, date: str) -> Dict[str, Any]:
-        """Fetch sleep for a particular date (YYYY-MM-DD)"""
+    def fetch_sleep(self, start_date: str, end_date: Optional[str] = None) -> Dict[str, Any]:
+        """Fetch sleep for a single date or a date range.
+
+        - If only `start_date` is provided, calls `/sleep/date/{date}.json`.
+        - If `end_date` is provided, calls `/sleep/date/{start_date}/{end_date}.json`.
+
+        Returns the parsed JSON response from Fitbit (contains a `sleep` list).
+        """
         self._refresh_if_needed()
-        url = f"https://api.fitbit.com/1.2/user/-/sleep/date/{date}.json"
+        if end_date:
+            url = f"https://api.fitbit.com/1.2/user/-/sleep/date/{start_date}/{end_date}.json"
+        else:
+            url = f"https://api.fitbit.com/1.2/user/-/sleep/date/{start_date}.json"
         resp = requests.get(url, headers=self._auth_header())
         resp.raise_for_status()
         return resp.json()
 
+    def fetch_hrv_range(self, start_date: str, end_date: str) -> dict:
+        """
+        Fetch HRV data for each day in the date range [start_date, end_date] (inclusive).
+        Returns a dict keyed by date with the HRV data for each day.
+        """
+        import datetime
+        results = {}
+        start_dt = datetime.datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.datetime.strptime(end_date, "%Y-%m-%d")
+        cur = start_dt
+        while cur <= end_dt:
+            date_str = cur.strftime("%Y-%m-%d")
+            results[date_str] = self.fetch_hrv(date_str)
+            cur += datetime.timedelta(days=1)
+        return results
+    
     def fetch_hrv(self, date: str) -> Dict[str, Any]:
         """Fitbit HRV endpoints are limited; attempt to fetch HRV for date"""
         self._refresh_if_needed()
@@ -90,3 +116,55 @@ class FitbitClient:
             return {}
         resp.raise_for_status()
         return resp.json()
+
+    def fetch_intraday_steps(self, date: str) -> List[Dict[str, Any]]:
+        """Fetch minute-level step counts for a single date (YYYY-MM-DD).
+
+        Returns a list of datapoints like {"time": "HH:MM:SS", "value": N}.
+        """
+        self._refresh_if_needed()
+        url = f"https://api.fitbit.com/1/user/-/activities/steps/date/{date}/1d/1min.json"
+        resp = requests.get(url, headers=self._auth_header())
+        if resp.status_code == 404:
+            return []
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("activities-steps-intraday", {}).get("dataset", [])
+
+    def fetch_intraday_heart(self, date: str, start_time: Optional[str] = None, end_time: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Fetch minute-level heart rate for a single date.
+
+        If `start_time` and `end_time` are provided they should be `HH:MM` or `HH:MM:SS`.
+        Returns a list of datapoints like {"time": "HH:MM:SS", "value": N}.
+        """
+        self._refresh_if_needed()
+        if start_time and end_time:
+            url = f"https://api.fitbit.com/1/user/-/activities/heart/date/{date}/1d/1min/time/{start_time}/{end_time}.json"
+        else:
+            url = f"https://api.fitbit.com/1/user/-/activities/heart/date/{date}/1d/1min.json"
+        resp = requests.get(url, headers=self._auth_header())
+        if resp.status_code == 404:
+            return []
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("activities-heart-intraday", {}).get("dataset", [])
+
+    def subscribe(self, collection: str, subscription_id: str) -> dict:
+        """
+        Register a subscription for a user (activities, foods, sleep, body).
+        collection: e.g. 'activities', 'foods', 'sleep', 'body'
+        subscription_id: unique string for this subscription (e.g. user_id)
+        """
+        url = f"https://api.fitbit.com/1/user/-/{collection}/apiSubscriptions/{subscription_id}.json"
+        resp = requests.post(url, headers=self._auth_header())
+        resp.raise_for_status()
+        return resp.json() if resp.content else {"status": resp.status_code}
+
+    def unsubscribe(self, collection: str, subscription_id: str) -> dict:
+        """
+        Remove a subscription for a user.
+        """
+        url = f"https://api.fitbit.com/1/user/-/{collection}/apiSubscriptions/{subscription_id}.json"
+        resp = requests.delete(url, headers=self._auth_header())
+        resp.raise_for_status()
+        return {"status": resp.status_code}

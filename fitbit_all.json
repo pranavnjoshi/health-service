@@ -1,0 +1,120 @@
+﻿{
+    "provider":  "fitbit",
+    "user_id":  "me",
+    "metrics":  {
+                    "steps":  [
+                                  {
+                                      "timestamp":  0,
+                                      "value":  20359
+                                  },
+                                  {
+                                      "timestamp":  1,
+                                      "value":  17839
+                                  },
+                                  {
+                                      "timestamp":  2,
+                                      "value":  21065
+                                  },
+                                  {
+                                      "timestamp":  3,
+                                      "value":  21345
+                                  },
+                                  {
+                                      "timestamp":  4,
+                                      "value":  13149
+                                  },
+                                  {
+                                      "timestamp":  5,
+                                      "value":  15269
+                                  },
+                                  {
+                                      "timestamp":  6,
+                                      "value":  13632
+                                  },
+                                  {
+                                      "timestamp":  7,
+                                      "value":  12614
+                                  },
+                                  {
+                                      "timestamp":  8,
+                                      "value":  8029
+                                  }
+                              ],
+                    "calories":  [
+                                     {
+                                         "timestamp":  0,
+                                         "value":  3043.0
+                                     },
+                                     {
+                                         "timestamp":  1,
+                                         "value":  2918.0
+                                     },
+                                     {
+                                         "timestamp":  2,
+                                         "value":  3237.0
+                                     },
+                                     {
+                                         "timestamp":  3,
+                                         "value":  3233.0
+                                     },
+                                     {
+                                         "timestamp":  4,
+                                         "value":  3036.0
+                                     },
+                                     {
+                                         "timestamp":  5,
+                                         "value":  2905.0
+                                     },
+                                     {
+                                         "timestamp":  6,
+                                         "value":  2863.0
+                                     },
+                                     {
+                                         "timestamp":  7,
+                                         "value":  2634.0
+                                     },
+                                     {
+                                         "timestamp":  8,
+                                         "value":  2031.0
+                                     }
+                                 ],
+                    "weight":  [
+                                   {
+                                       "timestamp":  0,
+                                       "value":  69.0
+                                   },
+                                   {
+                                       "timestamp":  1,
+                                       "value":  69.0
+                                   },
+                                   {
+                                       "timestamp":  2,
+                                       "value":  66.0
+                                   },
+                                   {
+                                       "timestamp":  3,
+                                       "value":  69.0
+                                   }
+                               ],
+                    "hrv":  [
+                                {
+                                    "hrv":  [
+                                                {
+                                                    "value":  {
+                                                                  "dailyRmssd":  37.319,
+                                                                  "deepRmssd":  59.831
+                                                              },
+                                                    "dateTime":  "2026-02-10"
+                                                }
+                                            ]
+                                }
+                            ]
+                },
+    "sleep":  [
+                  {
+                      "start_time":  "2026-02-09T22:30:00.000",
+                      "end_time":  "2026-02-10T05:58:30.000",
+                      "type":  "stages"
+                  }
+              ]
+}
