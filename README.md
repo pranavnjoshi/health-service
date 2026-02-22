@@ -29,6 +29,23 @@ Endpoints
 - `POST /connect/{provider}/{user_id}` : store OAuth tokens (body `access_token`, `refresh_token`, `expires_at`)
 - `GET /data/{provider}/{user_id}` : fetch metrics for the user. Query params: `start`, `end`, `metrics` (comma-separated)
 
+Queue-first ingestion (cloud-agnostic)
+
+- Fitbit webhook notifications are enqueued first and acknowledged quickly.
+- Queue backend is configured by environment variable `QUEUE_BACKEND`:
+	- `memory` (default, local dev)
+	- `kafka`
+	- `gcp_pubsub`
+	- `aws_sqs`
+- Configure backend-specific variables in `.env` (see `.env.example`).
+- If backend initialization fails and `QUEUE_FALLBACK_TO_MEMORY=true`, service falls back to in-memory queue.
+
+Optional backend dependencies
+
+- Kafka: `pip install confluent-kafka`
+- GCP Pub/Sub: `pip install google-cloud-pubsub`
+- AWS SQS: `pip install boto3`
+
 Notes
 - Apple Health: there is no public server-side HealthKit API. To ingest Apple Watch data you'll need to sync from-device (HealthKit) to your backend (e.g., via an iOS app) or use HealthKit export. This repo includes a placeholder showing how to wire a device upload.
 - For production, implement secure OAuth flows and validate tokens. Tokens are stored in Firestore under `oauth_tokens` collection by default.

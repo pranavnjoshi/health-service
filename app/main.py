@@ -1,28 +1,11 @@
-from fastapi import Request as FastAPIRequest
-# Fitbit Webhook endpoint for Subscriptions API
-@app.api_route("/webhook/fitbit", methods=["GET", "POST"])
-async def fitbit_webhook(request: FastAPIRequest):
-    # Verification: Fitbit sends a GET with a verify code
-    if request.method == "GET":
-        verify_code = os.getenv("FITBIT_SUBSCRIPTION_VERIFY_CODE", "")
-        code = request.query_params.get("verify")
-        if code and code == verify_code:
-            logger.info(f"[webhook] Fitbit verification succeeded")
-            return HTMLResponse(content=code, status_code=204)
-        logger.warning(f"[webhook] Fitbit verification failed: {code}")
-        return HTMLResponse(content="Invalid verification code", status_code=404)
-    # Notification: Fitbit sends a POST with JSON body
-    body = await request.json()
-    logger.info(f"[webhook] Fitbit notification received: {body}")
-    # TODO: Add your coaching/processing logic here
-    return {"status": "received"}
 from statistics import mean
+import calendar
 import dateutil
 from fastapi import FastAPI, HTTPException, Body, Query
 from dotenv import load_dotenv
 load_dotenv(".env.local")
 import logging
-from fastapi.responses import RedirectResponse, HTMLResponse
+from fastapi.responses import RedirectResponse, HTMLResponse, Response
 from fastapi.requests import Request
 import base64
 import requests
@@ -38,6 +21,8 @@ from app.firebase_client import save_tokens, get_tokens
 from app.providers.fitbit import FitbitClient
 from app.providers.google_fit import GoogleFitClient
 from app.providers.apple_health import upload_healthkit_payload
+from app.services.event_bus import create_queue_client_from_env
+from app.services.provider_registry import create_provider_service_registry
 from pydantic import BaseModel
 import logging
 from logging.handlers import RotatingFileHandler
@@ -55,6 +40,26 @@ logger.handlers = []  # Remove any default handlers
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 app = FastAPI(title="Fitness Data Microservice")
+queue_client = create_queue_client_from_env(logger=logger)
+provider_services = create_provider_service_registry(logger=logger, queue_client=queue_client)
+fitbit_push_service = provider_services.get_push("fitbit")
+fitbit_pull_service = provider_services.get_pull("fitbit")
+
+
+# Fitbit Webhook endpoint for Subscriptions API
+@app.api_route("/webhook/fitbit", methods=["GET", "POST"])
+async def fitbit_webhook(request: Request):
+    # Verification: Fitbit sends a GET with a verify code
+    if request.method == "GET":
+        code = request.query_params.get("verify")
+        if fitbit_push_service.is_valid_verification_code(code):
+            logger.info(f"[webhook] Fitbit verification succeeded")
+            return Response(status_code=204)
+        logger.warning(f"[webhook] Fitbit verification failed: {code}")
+        return HTMLResponse(content="Invalid verification code", status_code=404)
+    # Notification: Fitbit sends a POST with JSON body
+    body = await request.json()
+    return fitbit_push_service.ingest_notifications(body)
 
 # Define this at the top level of main.py
 def to_unix_timestamp(val):
@@ -233,67 +238,60 @@ def get_data(provider: str, user_id: str, start: Optional[str] = Query(None), en
 
     if provider.lower() == "fitbit":
         client = FitbitClient(tokens, provider=provider, user_id=user_id, persist_on_refresh=True)
-        resp = MetricsResponse(provider=provider, user_id=user_id)
         try:
-            if "steps" in metrics_list and start and end:
-                items = client.fetch_steps(start, end)
-                resp.metrics["steps"] = [MetricPoint(timestamp=idx, value=float(x.get("value", 0))) for idx, x in enumerate(items)]
-            if "calories" in metrics_list and start and end:
-                items = client.fetch_calories(start, end)
-                resp.metrics["calories"] = [MetricPoint(timestamp=idx, value=float(x.get("value", 0))) for idx, x in enumerate(items)]
-            if "weight" in metrics_list and start and end:
-                items = client.fetch_weight(start, end)
-                resp.metrics["weight"] = [MetricPoint(timestamp=idx, value=float(x.get("weight", 0))) for idx, x in enumerate(items)]
-            if "sleep" in metrics_list and start:
-                logger.info(f"Fetching sleep for user_id={user_id}")
-                
-                # Initialize explicitly to handle empty responses
-                resp.metrics["sleep_stages"] = []
-                resp.sleep = []
-                
-                sleep_data = client.fetch_sleep(start, end)
-                raw_logs = sleep_data.get("sleep", [])
-                
-                formatted_logs = []
-                segments = []
-                
-                for log in raw_logs:
-                    # 1. Parse full Fitbit log
-                    try:
-                        formatted_logs.append(FitbitSleepLog(**log))
-                    except Exception as e:
-                        logger.warning(f"Validation failed for log {log.get('logId')}: {e}")
-
-                    # 2. Parse into simplified SleepSegments
-                    st_ts = to_unix_timestamp(log.get("startTime"))
-                    et_ts = to_unix_timestamp(log.get("endTime"))
-                    
-                    if st_ts > 0 and et_ts > 0:
-                        segments.append(SleepSegment(
-                            start_time=st_ts, 
-                            end_time=et_ts, 
-                            type=log.get("type", "unknown")
-                        ))
-                
-                resp.metrics["sleep_stages"] = formatted_logs
-                resp.sleep = segments
-            if "hrv" in metrics_list and start:
-                # If you have a MetricPoint model for HRV, use it; else keep as dict
-                hrv_data = client.fetch_hrv(start)
-                if isinstance(hrv_data, dict) and "value" in hrv_data:
-                    resp.metrics["hrv"] = [MetricPoint(timestamp=0, value=float(hrv_data["value"]))]
-                else:
-                    resp.metrics["hrv"] = [hrv_data]
-            if "steps_minute" in metrics_list and start:
-                items = client.fetch_intraday_steps(start)
-                resp.metrics["steps_minute"] = [MetricPoint(timestamp=idx, value=float(x.get("value", 0))) for idx, x in enumerate(items)]
-            if "heart_minute" in metrics_list and start:
-                items = client.fetch_intraday_heart(start, start_time=time_start, end_time=time_end)
-                resp.metrics["heart_minute"] = [MetricPoint(timestamp=idx, value=float(x.get("value", 0))) for idx, x in enumerate(items)]
+            resp = fitbit_pull_service.fetch_metrics(
+                provider=provider,
+                user_id=user_id,
+                client=client,
+                metrics_list=metrics_list,
+                start=start,
+                end=end,
+                time_start=time_start,
+                time_end=time_end,
+                to_unix_timestamp=to_unix_timestamp,
+            )
         except Exception as exc:
             logger.exception(f"Error fetching data for provider={provider}, user_id={user_id}, metrics={metrics_list}, start={start}, end={end}: {exc}")
             raise HTTPException(status_code=500, detail=f"Error fetching data: {exc}")
         return resp
+
+    if provider.lower() == "google":
+        client = GoogleFitClient(tokens)
+        google_pull_service = provider_services.get_pull("google")
+        try:
+            return google_pull_service.fetch_metrics(
+                provider=provider,
+                user_id=user_id,
+                client=client,
+                metrics_list=metrics_list,
+                start=start,
+                end=end,
+                time_start=time_start,
+                time_end=time_end,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except Exception as exc:
+            logger.exception(f"Error fetching Google data for user_id={user_id}: {exc}")
+            raise HTTPException(status_code=500, detail=f"Error fetching data: {exc}")
+
+    if provider.lower() == "apple":
+        apple_pull_service = provider_services.get_pull("apple")
+        try:
+            return apple_pull_service.fetch_metrics(
+                provider=provider,
+                user_id=user_id,
+                client=None,
+                metrics_list=metrics_list,
+                start=start,
+                end=end,
+                time_start=time_start,
+                time_end=time_end,
+            )
+        except NotImplementedError as exc:
+            raise HTTPException(status_code=501, detail=str(exc))
+
+    raise HTTPException(status_code=400, detail="Unknown provider")
 
 
 @app.get("/oauth/fitbit/start/{user_id}")
@@ -377,27 +375,6 @@ def google_oauth_callback(code: str = Query(...), state: Optional[str] = Query(N
     tok = resp.json()
     save_tokens("google", state or "unknown", tok)
     return {"status": "saved", "provider": "google", "user_id": state, "tokens": tok}
-
-    if provider.lower() == "google":
-        client = GoogleFitClient(tokens)
-        # Example requires start/end in milliseconds (or nanos). This endpoint is flexible — caller provides params.
-        # For demonstration we require start/end to be epoch milliseconds passed as strings.
-        if not start or not end:
-            raise HTTPException(status_code=400, detail="Google Fit requires start and end (millis)")
-        try:
-            start_ms = int(start)
-            end_ms = int(end)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="start/end must be integer millis for Google Fit")
-        # Example: aggregate steps
-        agg = client.example_steps_aggregate(start_ms * 1000000, end_ms * 1000000)
-        return {"provider": provider, "user_id": user_id, "aggregate": agg}
-
-    if provider.lower() == "apple":
-        # Apple Health flows are device-driven; accept uploads
-        raise HTTPException(status_code=501, detail="Use the device-upload endpoint for Apple Health")
-
-    raise HTTPException(status_code=400, detail="Unknown provider")
 
 
 @app.post("/apple/upload/{user_id}")

@@ -1,0 +1,21 @@
+firebase.json
+secrets/firebase.json
+
+# Python virtual environments
+.venv/
+venv/
+
+# Python cache/bytecode
+__pycache__/
+*.py[cod]
+
+# Local environment files
+.env
+.env.local
+
+# Logs
+app.log
+*.log
+
+# Generated Fitbit/data exports
+fitbit_*.json
