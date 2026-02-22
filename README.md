@@ -46,6 +46,27 @@ Optional backend dependencies
 - GCP Pub/Sub: `pip install google-cloud-pubsub`
 - AWS SQS: `pip install boto3`
 
+Worker process (modular stages + retry/DLQ)
+
+- Run one worker process:
+
+```bash
+python scripts/run_fitbit_worker.py
+```
+
+- Worker stages are modular:
+	- parse event
+	- dedupe event
+	- fetch provider details
+	- persist processed output
+- Default topics/queues:
+	- raw: `fitbit.notifications.raw`
+	- retry: `fitbit.notifications.retry`
+	- dlq: `fitbit.notifications.dlq`
+- Retry behavior:
+	- failed events are sent to retry topic until `WORKER_MAX_RETRIES`
+	- events exceeding retry limit are sent to DLQ topic
+
 Notes
 - Apple Health: there is no public server-side HealthKit API. To ingest Apple Watch data you'll need to sync from-device (HealthKit) to your backend (e.g., via an iOS app) or use HealthKit export. This repo includes a placeholder showing how to wire a device upload.
 - For production, implement secure OAuth flows and validate tokens. Tokens are stored in Firestore under `oauth_tokens` collection by default.

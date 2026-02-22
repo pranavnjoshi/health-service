@@ -1,6 +1,7 @@
 from statistics import mean
 import calendar
 import dateutil
+import json
 from fastapi import FastAPI, HTTPException, Body, Query
 from dotenv import load_dotenv
 load_dotenv(".env.local")
@@ -16,6 +17,7 @@ import os
 import urllib.parse
 import base64
 import requests
+from pathlib import Path
 from app.models import TokenModel, MetricsResponse, SleepSegment, MetricPoint, FitbitSleepLog
 from app.firebase_client import save_tokens, get_tokens
 from app.providers.fitbit import FitbitClient
@@ -44,6 +46,51 @@ queue_client = create_queue_client_from_env(logger=logger)
 provider_services = create_provider_service_registry(logger=logger, queue_client=queue_client)
 fitbit_push_service = provider_services.get_push("fitbit")
 fitbit_pull_service = provider_services.get_pull("fitbit")
+
+
+def _read_last_processed_at(output_file: str) -> Optional[str]:
+    path = Path(output_file)
+    if not path.exists() or not path.is_file():
+        return None
+
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            lines = [line.strip() for line in fh if line.strip()]
+        if not lines:
+            return None
+        record = json.loads(lines[-1])
+        return record.get("processed_at")
+    except Exception:
+        return None
+
+
+@app.get("/health/worker")
+def worker_health():
+    raw_topic = os.getenv("WORKER_TOPIC_RAW", "fitbit.notifications.raw")
+    retry_topic = os.getenv("WORKER_TOPIC_RETRY", "fitbit.notifications.retry")
+    dlq_topic = os.getenv("WORKER_TOPIC_DLQ", "fitbit.notifications.dlq")
+    worker_output_file = os.getenv("WORKER_OUTPUT_FILE", "worker_processed_events.jsonl")
+
+    raw_depth = queue_client.size(raw_topic) if hasattr(queue_client, "size") else None
+    retry_depth = queue_client.size(retry_topic) if hasattr(queue_client, "size") else None
+    dlq_depth = queue_client.size(dlq_topic) if hasattr(queue_client, "size") else None
+
+    return {
+        "worker": {
+            "topics": {
+                "raw": raw_topic,
+                "retry": retry_topic,
+                "dlq": dlq_topic,
+            },
+            "queue_depth": {
+                "raw": raw_depth,
+                "retry": retry_depth,
+                "dlq": dlq_depth,
+            },
+            "last_processed_at": _read_last_processed_at(worker_output_file),
+            "output_file": worker_output_file,
+        }
+    }
 
 
 # Fitbit Webhook endpoint for Subscriptions API

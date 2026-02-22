@@ -33,6 +33,12 @@ class InMemoryQueueClient:
             self._topics[topic].clear()
         return events
 
+    def consume_batch(self, topic: str, max_messages: int = 50, wait_seconds: int = 0) -> List[Dict[str, Any]]:
+        with self._lock:
+            queue = self._topics[topic]
+            count = min(max_messages, len(queue))
+            return [queue.popleft() for _ in range(count)]
+
 
 class KafkaQueueClient:
     def __init__(self, brokers: str, client_id: str = "health-service"):
@@ -42,6 +48,10 @@ class KafkaQueueClient:
             raise RuntimeError("Kafka backend requires 'confluent-kafka' package") from exc
 
         self._producer = Producer({"bootstrap.servers": brokers, "client.id": client_id})
+        self._brokers = brokers
+        self._client_id = client_id
+        self._consumer = None
+        self._consumer_topic = None
 
     def publish_many(self, topic: str, events: List[Dict[str, Any]]) -> int:
         published = 0
@@ -57,6 +67,44 @@ class KafkaQueueClient:
     def size(self, topic: str) -> Optional[int]:
         return None
 
+    def consume_batch(self, topic: str, max_messages: int = 50, wait_seconds: int = 2) -> List[Dict[str, Any]]:
+        try:
+            from confluent_kafka import Consumer
+        except ImportError as exc:
+            raise RuntimeError("Kafka consumer requires 'confluent-kafka' package") from exc
+
+        if self._consumer is None:
+            group_id = os.getenv("QUEUE_KAFKA_GROUP_ID", "health-service-worker")
+            auto_offset_reset = os.getenv("QUEUE_KAFKA_AUTO_OFFSET_RESET", "latest")
+            self._consumer = Consumer(
+                {
+                    "bootstrap.servers": self._brokers,
+                    "group.id": group_id,
+                    "auto.offset.reset": auto_offset_reset,
+                    "enable.auto.commit": True,
+                }
+            )
+
+        if self._consumer_topic != topic:
+            self._consumer.subscribe([topic])
+            self._consumer_topic = topic
+
+        events: List[Dict[str, Any]] = []
+        timeout = max(0.1, float(wait_seconds))
+        while len(events) < max_messages:
+            msg = self._consumer.poll(timeout=timeout)
+            if msg is None:
+                break
+            if msg.error():
+                continue
+            try:
+                payload = json.loads(msg.value().decode("utf-8"))
+            except Exception:
+                continue
+            if isinstance(payload, dict):
+                events.append(payload)
+        return events
+
 
 class GcpPubSubQueueClient:
     def __init__(self, project_id: str, topic_prefix: str = ""):
@@ -66,8 +114,14 @@ class GcpPubSubQueueClient:
             raise RuntimeError("GCP Pub/Sub backend requires 'google-cloud-pubsub' package") from exc
 
         self._publisher = pubsub_v1.PublisherClient()
+        self._subscriber = pubsub_v1.SubscriberClient()
         self._project_id = project_id
         self._topic_prefix = topic_prefix
+        subscriptions_raw = os.getenv("QUEUE_GCP_SUBSCRIPTIONS", "{}").strip()
+        try:
+            self._subscription_map = json.loads(subscriptions_raw) if subscriptions_raw else {}
+        except Exception:
+            self._subscription_map = {}
 
     def _topic_id(self, topic: str) -> str:
         normalized = topic.replace(".", "-")
@@ -86,6 +140,33 @@ class GcpPubSubQueueClient:
 
     def size(self, topic: str) -> Optional[int]:
         return None
+
+    def consume_batch(self, topic: str, max_messages: int = 50, wait_seconds: int = 2) -> List[Dict[str, Any]]:
+        subscription_id = self._subscription_map.get(topic) or self._subscription_map.get("default")
+        if not subscription_id:
+            raise RuntimeError("QUEUE_GCP_SUBSCRIPTIONS must map topic to subscription id for consuming")
+
+        subscription_path = self._subscriber.subscription_path(self._project_id, subscription_id)
+        response = self._subscriber.pull(
+            request={"subscription": subscription_path, "max_messages": max_messages},
+            timeout=max(1, wait_seconds),
+        )
+
+        ack_ids = []
+        events: List[Dict[str, Any]] = []
+        for message in response.received_messages:
+            ack_ids.append(message.ack_id)
+            try:
+                payload = json.loads(message.message.data.decode("utf-8"))
+            except Exception:
+                continue
+            if isinstance(payload, dict):
+                events.append(payload)
+
+        if ack_ids:
+            self._subscriber.acknowledge(request={"subscription": subscription_path, "ack_ids": ack_ids})
+
+        return events
 
 
 class AwsSqsQueueClient:
@@ -125,6 +206,29 @@ class AwsSqsQueueClient:
             return int(attrs["Attributes"].get("ApproximateNumberOfMessages", "0"))
         except Exception:
             return None
+
+    def consume_batch(self, topic: str, max_messages: int = 10, wait_seconds: int = 2) -> List[Dict[str, Any]]:
+        queue_url = self._queue_url_for(topic)
+        response = self._client.receive_message(
+            QueueUrl=queue_url,
+            MaxNumberOfMessages=max(1, min(max_messages, 10)),
+            WaitTimeSeconds=max(0, min(wait_seconds, 20)),
+        )
+        messages = response.get("Messages", [])
+        events: List[Dict[str, Any]] = []
+        for msg in messages:
+            body = msg.get("Body")
+            receipt_handle = msg.get("ReceiptHandle")
+            if not body or not receipt_handle:
+                continue
+            try:
+                payload = json.loads(body)
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                events.append(payload)
+            self._client.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
+        return events
 
 
 def create_queue_client_from_env(logger=None):
