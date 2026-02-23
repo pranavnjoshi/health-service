@@ -117,6 +117,7 @@ class GcpPubSubQueueClient:
         self._subscriber = pubsub_v1.SubscriberClient()
         self._project_id = project_id
         self._topic_prefix = topic_prefix
+        self._auto_create = os.getenv("QUEUE_GCP_AUTO_CREATE", "false").strip().lower() == "true"
         subscriptions_raw = os.getenv("QUEUE_GCP_SUBSCRIPTIONS", "{}").strip()
         try:
             self._subscription_map = json.loads(subscriptions_raw) if subscriptions_raw else {}
@@ -127,8 +128,35 @@ class GcpPubSubQueueClient:
         normalized = topic.replace(".", "-")
         return f"{self._topic_prefix}{normalized}" if self._topic_prefix else normalized
 
+    def _subscription_id(self, topic: str) -> str:
+        mapped = self._subscription_map.get(topic) or self._subscription_map.get("default")
+        if mapped:
+            return mapped
+        return f"{self._topic_id(topic)}-sub"
+
+    def _ensure_topic(self, topic_id: str) -> str:
+        topic_path = self._publisher.topic_path(self._project_id, topic_id)
+        if not self._auto_create:
+            return topic_path
+        try:
+            self._publisher.get_topic(request={"topic": topic_path})
+        except Exception:
+            self._publisher.create_topic(request={"name": topic_path})
+        return topic_path
+
+    def _ensure_subscription(self, subscription_id: str, topic_path: str) -> str:
+        subscription_path = self._subscriber.subscription_path(self._project_id, subscription_id)
+        if not self._auto_create:
+            return subscription_path
+        try:
+            self._subscriber.get_subscription(request={"subscription": subscription_path})
+        except Exception:
+            self._subscriber.create_subscription(request={"name": subscription_path, "topic": topic_path})
+        return subscription_path
+
     def publish_many(self, topic: str, events: List[Dict[str, Any]]) -> int:
-        topic_path = self._publisher.topic_path(self._project_id, self._topic_id(topic))
+        topic_id = self._topic_id(topic)
+        topic_path = self._ensure_topic(topic_id)
         published = 0
         for event in events:
             if not isinstance(event, dict):
@@ -142,11 +170,10 @@ class GcpPubSubQueueClient:
         return None
 
     def consume_batch(self, topic: str, max_messages: int = 50, wait_seconds: int = 2) -> List[Dict[str, Any]]:
-        subscription_id = self._subscription_map.get(topic) or self._subscription_map.get("default")
-        if not subscription_id:
-            raise RuntimeError("QUEUE_GCP_SUBSCRIPTIONS must map topic to subscription id for consuming")
-
-        subscription_path = self._subscriber.subscription_path(self._project_id, subscription_id)
+        topic_id = self._topic_id(topic)
+        topic_path = self._ensure_topic(topic_id)
+        subscription_id = self._subscription_id(topic)
+        subscription_path = self._ensure_subscription(subscription_id, topic_path)
         response = self._subscriber.pull(
             request={"subscription": subscription_path, "max_messages": max_messages},
             timeout=max(1, wait_seconds),

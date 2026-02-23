@@ -1,5 +1,7 @@
 firebase.json
 secrets/firebase.json
+gcp.json
+secrets/gcp.json
 
 # Python virtual environments
 .venv/

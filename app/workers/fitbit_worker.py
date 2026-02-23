@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from app.firebase_client import get_tokens
 from app.providers.fitbit import FitbitClient
 from app.services.event_bus import create_queue_client_from_env
+from app.services.instrumentation import timed_call
 
 
 class ParseStage:
@@ -120,22 +121,48 @@ class FitbitEventWorker:
         self.max_retries = int(os.getenv("WORKER_MAX_RETRIES", "3"))
         self.batch_size = int(os.getenv("WORKER_BATCH_SIZE", "25"))
         self.poll_seconds = int(os.getenv("WORKER_POLL_SECONDS", "2"))
+        self.timing_enabled = os.getenv("WORKER_TIMING_ENABLED", "true").strip().lower() == "true"
+        self.timing_log_level = os.getenv("WORKER_TIMING_LOG_LEVEL", "info").strip().lower()
+        self.timing_warn_ms = float(os.getenv("WORKER_TIMING_WARN_MS", "1000"))
 
         self.parse_stage = ParseStage()
         self.dedupe_stage = DedupeStage()
         self.fetch_stage = FetchDetailsStage()
         self.persist_stage = PersistStage()
 
+    def _timed(self, operation: str, fn, *args, **kwargs):
+        return timed_call(
+            self.logger,
+            operation,
+            fn,
+            *args,
+            enabled=self.timing_enabled,
+            log_level=self.timing_log_level,
+            warn_threshold_ms=self.timing_warn_ms,
+            **kwargs,
+        )
+
+    @staticmethod
+    def _is_idle_timeout_error(exc: Exception) -> bool:
+        name = exc.__class__.__name__.lower()
+        msg = str(exc).lower()
+        return (
+            "deadlineexceeded" in name
+            or "timeoutexceeded" in name
+            or "deadline exceeded" in msg
+            or "timed out" in msg
+        )
+
     def _process_event(self, event: Dict[str, Any]) -> None:
-        context = self.parse_stage.run(event)
-        context = self.dedupe_stage.run(context)
+        context = self._timed("worker.stage.parse", self.parse_stage.run, event)
+        context = self._timed("worker.stage.dedupe", self.dedupe_stage.run, context)
 
         if context.get("is_duplicate"):
             self.logger.info(f"[worker] duplicate skipped: {context.get('dedupe_key')}")
             return
 
-        context = self.fetch_stage.run(context)
-        self.persist_stage.run(context)
+        context = self._timed("worker.stage.fetch_details", self.fetch_stage.run, context)
+        self._timed("worker.stage.persist", self.persist_stage.run, context)
         self.logger.info(f"[worker] processed event: {context.get('dedupe_key')}")
 
     def _handle_failure(self, event: Dict[str, Any], exc: Exception) -> None:
@@ -161,13 +188,27 @@ class FitbitEventWorker:
         if not consume:
             raise RuntimeError("Configured queue backend does not support consume_batch required by worker")
 
-        events = consume(topic, max_messages=self.batch_size, wait_seconds=self.poll_seconds)
+        try:
+            events = self._timed(
+                f"worker.queue.consume.{topic}",
+                consume,
+                topic,
+                max_messages=self.batch_size,
+                wait_seconds=self.poll_seconds,
+                suppress_error_fn=self._is_idle_timeout_error,
+            )
+        except Exception as exc:
+            if self._is_idle_timeout_error(exc):
+                self.logger.debug(f"[worker] idle poll timeout for topic={topic}")
+            else:
+                self.logger.warning(f"[worker] consume error for topic={topic}: {exc}")
+            return 0
         processed = 0
         for event in events:
             if not isinstance(event, dict):
                 continue
             try:
-                self._process_event(event)
+                self._timed("worker.event.process", self._process_event, event)
             except Exception as exc:
                 self._handle_failure(event, exc)
             processed += 1
