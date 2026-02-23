@@ -1,0 +1,1 @@
+{"processed_at": "2026-02-23T06:59:15.864343Z", "event": {"date": "2026-02-23", "ownerId": "CZMT4J", "subscriptionId": "me-body-test", "ownerType": "user", "collectionType": "body"}, "details": {"user_id": "me", "collectionType": "body", "date": "2026-02-23", "weight": []}, "dedupe_key": "fitbit|CZMT4J|me-body-test|body|2026-02-23"}
